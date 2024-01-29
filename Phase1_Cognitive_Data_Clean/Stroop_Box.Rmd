@@ -1,0 +1,138 @@
+---
+title: "Stroop Box"
+author: "Shafiq"
+date: "24/02/2022"
+output: html_document
+---
+
+
+```{r setup, echo=FALSE, message=FALSE, warning=FALSE}
+library(ggplot2)
+library(data.table)
+library(patchwork)
+library(forcats)
+library(knitr)
+library(lubridate)
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(MASS)
+library(gplots)
+library(RColorBrewer)
+library(rmarkdown)
+library(skimr)
+library(ggpubr)
+```
+
+
+# Reading pilot data and descriptive stats 
+```{r Reading pilot file, echo = FALSE, warning = FALSE}
+setwd("C:/NIHR_Bioresource/Orginal_Data/Gene_and_cognition_study/Emma_har/G&C_Main_Phase1_Pilot_new/results_20200825_Modified_SPIDs")
+
+bc.p <- fread("results_bc_20200825_PIDRemoved_MOD.csv") #9390
+```
+
+# Reading Main Data
+```{r Reading data, echo = FALSE, warning = FALSE}
+setwd("C:/NIHR_Bioresource/Orginal_Data/Gene_and_cognition_study/Emma_har/G&C_Main_Phase1_Cognitive_Data/G&P Main phase cognitive data - Part 1_Updated_17.06.2022")
+
+bc.m <- fread("results_bc_20211130_PIDRemoved.csv") #622,140 rows
+```
+
+
+# Removing duplicates from main phase data
+```{r stevens code}
+bc.m_nodups <- bc.m %>% 
+  mutate(time_stamp2 = dmy_hms(time_stamp)) %>% 
+  arrange(barcode, question, time_stamp2) %>% 
+  mutate(exactDuplicate = duplicated(.)) %>%  
+  mutate(diffDateTimeDuplicate = !exactDuplicate & {dplyr::select(., barcode, question) %>% duplicated()}) 
+
+
+dup_tests_removed <- bc.m_nodups %>% 
+  filter(exactDuplicate | diffDateTimeDuplicate) 
+
+dup_tests_removed %>% 
+  group_by(barcode, exactDuplicate, diffDateTimeDuplicate) %>% 
+  count()
+
+bc.m_nodups <- bc.m_nodups %>% 
+  filter(!exactDuplicate & !diffDateTimeDuplicate) %>% 
+  dplyr::select(colnames(bc.m))
+```
+
+
+# Merging data 
+```{r, echo = FALSE, warning = FALSE}
+bc <- full_join(bc.p,bc.m_nodups) 
+```
+
+
+# Device: Creating readable device varriable
+```{r Deive use, echo = FALSE, warning = FALSE}
+bc$device_name2 <- as.character(bc$device_name)
+bc$device_name2[grep("Windows", bc$device_name2, ignore.case = TRUE)] <- "Windows 10"
+bc$device_name2[grep("iphone", bc$device_name2, ignore.case = TRUE)] <- "iPhone"
+bc$device_name2[grep("android", bc$device_name2, ignore.case = TRUE)] <- "Android"
+bc$device_name2 <- as.factor(bc$device_name2)
+```
+
+# Clean response in milisecond varriable: Replace value <=0 with Minimim non-zero score from data
+```{r }
+bc <- bc[order(bc$response_ms),]
+zero_below <-bc %>% filter(response_ms<=0) 
+bc_zeros_barcode <- unique(zero_below$barcode)
+
+zero_below$iscorrect <- as.factor(zero_below$iscorrect)
+
+zero_below_pers <- bc %>% filter(barcode=="xxxxxxxx")
+zero_below_pers <- separate(zero_below_pers, question, into = c("test", "Number"), sep = 3, remove = FALSE)
+zero_below_pers <- zero_below_pers[order(zero_below_pers$Number),]
+
+bc$response_ms <- replace(bc$response_ms,bc$response_ms<=0, NA)
+
+# Replacing Zero response time with minimum response time, echo=TRUE}
+bc <- bc %>% replace_na(list(response_ms=2))
+```
+
+
+```{r Agrregating Stroop Box Test Data}
+bc$Response_type <- ifelse(bc$iscorrect==0, "In-correct", "Correct")
+bc$Response_type <- as.factor(bc$Response_type)
+
+
+bc <- separate(bc, question, into = c("test", "Number"), sep = 3, remove = FALSE)
+
+bc$bc_tests <- reorder(bc$question, bc$response_ms)
+bc$Response_type_reorder <- reorder(bc$Response_type, bc$response_ms)
+
+#Is correct 
+bc_iscorrect_sum <- aggregate(bc$iscorrect, by = list(bc$barcode), FUN = sum)
+colnames(bc_iscorrect_sum) <- c("barcode", "bc_correct_sum")
+
+ids <- bc_iscorrect_sum %>% filter(bc_correct_sum>30) #zero
+
+
+#is correct length
+bc_iscorrect_length <- aggregate(bc$iscorrect, by = list(bc$barcode), FUN = length)
+colnames(bc_iscorrect_length) <- c("barcode", "bc_correct_length")
+
+
+#Mean response time and device
+bc_Mean_ms <- plyr::ddply(bc, "barcode", summarise, bcMean_mil_sec = mean(response_ms), device_name2 = unique(device_name2))
+
+bc_reduced <- list(bc_iscorrect_sum,bc_Mean_ms,bc_iscorrect_length) %>%
+    Reduce(function(dtf1,dtf2) full_join(dtf1,dtf2,by="barcode"), .)
+
+
+# measuring proportion of correct answer
+bc_reduced$bc_correct_prop <- bc_reduced$bc_correct_sum/bc_reduced$bc_correct_length
+
+```
+
+```{r Saving Merged file}
+setwd("C:/Gene_cognition_shafiq/02_Cleaning_Cognitive_data/Aggregated_Clean_Cognitive_Data")
+fwrite(bc_reduced, file = "Stroop_Box_Aggregated_Feb2022.txt", sep = "\t", col.names = TRUE, row.names = FALSE, quote=FALSE)
+```
+
+

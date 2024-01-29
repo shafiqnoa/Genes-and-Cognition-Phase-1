@@ -1,0 +1,240 @@
+---
+title: "Vocabulary"
+author: "Shafiq"
+date: "01/03/2022"
+output: html_document
+---
+
+```{r setup, echo=FALSE, message=FALSE, warning=FALSE}
+library(ggplot2)
+library(data.table)
+library(patchwork)
+library(forcats)
+library(knitr)
+library(lubridate)
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(MASS)
+library(gplots)
+library(RColorBrewer)
+library(rmarkdown)
+library(skimr)
+library(ggpubr)
+```
+
+# Reading pilot data and descriptive stats 
+```{r Reading pilot file, echo = FALSE, warning = FALSE}
+setwd("C:/NIHR_Bioresource/Orginal_Data/Gene_and_cognition_study/Emma_har/G&C_Main_Phase1_Pilot_new/results_20200825_Modified_SPIDs")
+
+vy.p <- fread("results_vy_20200825_PIDRemoved_MOD.csv")
+```
+
+# Reading Main Data
+```{r Reading data, echo = FALSE, warning = FALSE}
+setwd("C:/NIHR_Bioresource/Orginal_Data/Gene_and_cognition_study/Emma_har/G&C_Main_Phase1_Cognitive_Data/G&P Main phase cognitive data - Part 3_Updated_17.06.2022")
+
+vy.m <- fread("results_vy_20211130_PIDRemoved.csv") 
+
+sapply(vy.m, function(x) sum(is.na(x))) # No NA value found 
+table(aggregate(vy.m$barcode, list(vy.m$barcode), length)[, 2]) 
+```
+
+
+# Removing duplicates from main phase data
+```{r stevens code}
+vy.m %>% 
+  group_by(barcode) %>% 
+  count() %>% 
+  pull(n) %>% 
+  table()
+
+vy.m %>% 
+  group_by(barcode) %>%
+  filter(n() > 20) %>% 
+  count()
+
+# find duplicates that are exact copies
+vy.m_nodups <- vy.m %>% 
+  mutate(time_stamp2 = dmy_hms(time_stamp)) %>% 
+  arrange(barcode, question, time_stamp2) %>% 
+  mutate(exactDuplicate = duplicated(.)) %>%  
+  mutate(diffDateTimeDuplicate = !exactDuplicate & {dplyr::select(., barcode, question) %>% duplicated()}) 
+
+# duplicates removed
+dup_tests_removed <- vy.m_nodups %>% 
+  filter(exactDuplicate | diffDateTimeDuplicate) 
+
+dup_tests_removed %>% 
+  group_by(barcode, exactDuplicate, diffDateTimeDuplicate) %>% 
+  count()
+
+# final dataset with no duplicates
+vy.m_nodups <- vy.m_nodups %>% 
+  filter(!exactDuplicate & !diffDateTimeDuplicate) %>% 
+  dplyr::select(colnames(vy.m))
+```
+
+
+# Merging main and pilot phase data 
+```{r, echo = FALSE, warning = FALSE}
+vy <- full_join(vy.p,vy.m_nodups) 
+```
+
+
+# Device: Creating readable device varriable
+```{r Deive use, echo = FALSE, warning = FALSE}
+vy$device_name2 <- as.character(vy$device_name)
+vy$device_name2[grep("Windows", vy$device_name2, ignore.case = TRUE)] <- "Windows 10"
+vy$device_name2[grep("iphone", vy$device_name2, ignore.case = TRUE)] <- "iPhone"
+vy$device_name2[grep("android",vy$device_name2, ignore.case = TRUE)] <- "Android"
+vy$device_name2 <- as.factor(vy$device_name2)
+```
+
+
+# Unreasonale values
+```{r}
+ggplot(vy, aes(y = response_ms)) + geom_boxplot() + scale_y_log10()
+unresonable <- vy %>% filter(response_ms>31000)
+unresonable_ids <- data.frame(unique(unresonable$barcode))
+vy$response_ms_mod <- replace(vy$response_ms,vy$response_ms>31000, 31000)
+```
+
+
+```{r Plottting Data for Further Examinations}
+ggplot(vy, aes(y = log10(response_ms),
+                   x = device_name2,
+                   fill = device_name2)) +
+  geom_boxplot()+
+  theme(legend.position="none")+
+  xlab("Device Used")+
+  ylab("Response Time: Mili-seconds (log10)")
+
+# Density plot by correct answers 
+p <- ggplot(vy, aes(x=log10(response_ms),group=as.factor(iscorrect), fill=as.factor(iscorrect))) +
+  geom_density(adjust=1.5)+
+             theme(
+    legend.position="right",
+    panel.spacing = unit(0.1, "lines"),
+    axis.ticks.x=element_blank()
+  )+
+    labs(title = "Vocabulary Level: Density plot for response time stratified by response type",
+     x = "Response Time in Mili-seconds (log10)", y = "Density")
+
+p + scale_fill_discrete(name="Response Type",
+                       breaks=c("1", "0"),
+                       labels=c("Correct", "In-Correct"))
+
+
+
+q <- ggplot(vy, aes(x=log10(response_ms), group=as.factor(iscorrect), fill=as.factor(iscorrect))) +
+  geom_density(adjust=1.5) +
+  facet_wrap(~device_name2,  ncol = 1, scales = "free") +
+  theme(
+    legend.position="right",
+    panel.spacing = unit(0.1, "lines"),
+    axis.ticks.x=element_blank()
+  )+
+    labs(title = "Vocabulary Level: Density plot for response time stratified by response type and devices",
+     x = "Response Time in Mili-seconds (log10)", y = "Density") 
+
+q + scale_fill_discrete(name="Response Type",
+                       breaks=c("1", "0"),
+                       labels=c("Correct", "In-Correct")) 
+
+
+
+vy$Response_type <- ifelse(vy$iscorrect==0, "In-correct", "Correct")
+vy$Response_type <- as.factor(vy$Response_type)
+table(vy$Response_type, useNA = "a")
+table(vy$iscorrect, useNA = "a")
+
+
+vy$vy_tests <- reorder(vy$question, vy$response_ms)
+vy$Response_type_reorder <- reorder(vy$Response_type, vy$response_ms)
+
+
+a <- ggplot(vy, aes(x=log10(response_ms),y=vy_tests, color= Response_type_reorder))+
+  geom_boxplot(outlier.size = 1)+
+  theme(axis.ticks.length=unit(.20, "cm"))+
+  labs(title = "Response Time Across Vocabulary Level Tasks",
+     x = "Response in Mili-seconds (log10)", y = "# Vocabulary Level Task (n=20)")+ 
+  theme_bw()+
+  theme(axis.text.y=element_text("bold", size=rel(0.70), angle=0))
+
+a + guides(color=guide_legend(title="Response Type"))
+
+
+
+b <- ggplot(vy, aes(x=log10(response_ms),y=vy_tests, color= Response_type_reorder))+
+  geom_point(size=1.5) +
+  facet_grid(Response_type_reorder ~ ., scales = "free", space = "free")+
+  theme(axis.ticks.length=unit(.20, "cm"))+
+  labs(title = "Response Time Across Vocabulary Level Tasks by Response Types",
+       x = "Response in Mili-seconds (log10)", y = "# Vocabulary Level Task (n=20)") + 
+  theme_bw()+
+  theme(legend.position="null", axis.text.y=element_text("bold", size=rel(0.70), angle=0))
+
+b
+
+
+c <- ggplot(vy, aes(x=log10(response_ms),y=vy_tests, color= Response_type_reorder))+ 
+  geom_boxplot(outlier.size = 1) +
+  theme(axis.ticks.length=unit(.20, "cm"))+
+  facet_wrap(~ device_name2, ncol = 3, scales = "free")+
+ 
+  labs(title = "Response Time Across Vocabulary Level Tasks by Response Types and Devices",
+       x = "Response in Mili-seconds (log10)", y = "# Vocabulary Level Task (n=20)")+
+  theme_bw()+
+  theme(axis.text.y=element_text("bold", size=rel(0.50), angle=0))
+
+c + guides(color=guide_legend(title="Response Type"))
+```
+
+# Agrregating Vocabulary Level Tasks
+```{r Agrregating Vocabulary Level Tasks}
+#is-correct 
+vy_iscorrect_sum <- aggregate(vy$iscorrect, by = list(vy$barcode), FUN = sum)
+colnames(vy_iscorrect_sum) <- c("barcode", "vy_correct_sum")
+table(vy_iscorrect_sum$vy_correct_sum, useNA = "a")
+ids <- vy_iscorrect_sum %>% filter(vy_correct_sum>20) #zero
+
+#is correct length
+vy_iscorrect_length <- aggregate(vy$iscorrect, by = list(vy$barcode), FUN = length)
+colnames(vy_iscorrect_length) <- c("barcode", "vy_correct_length")
+table(vy_iscorrect_length$vy_correct_length, useNA = "a")
+sum(table(vy_iscorrect_length$vy_correct_length, useNA = "a"))
+
+
+# Mean response time and device
+vy_Mean_ms <- plyr::ddply(vy, "barcode", summarise, vyMean_mil_sec = mean(response_ms), device_name2 = unique(device_name2))
+
+vy_reduced <- list(vy_iscorrect_sum,vy_Mean_ms,vy_iscorrect_length) %>%
+    Reduce(function(dtf1,dtf2) full_join(dtf1,dtf2,by="barcode"), .)
+
+summary(vy_reduced)
+
+# measuring proportion of correct answer
+vy_reduced$vy_correct_prop <- vy_reduced$vy_correct_sum/vy_reduced$vy_correct_length
+
+qplot(vy_reduced$vy_correct_prop)
+
+qplot(vy_reduced$vy_correct_prop, by(vy_reduced$vyMean_mil_sec, as.character(vy_reduced$barcode), mean),
+      ylab = "mean response time", xlab = "proportion correct")
+```
+
+```{r Saving Merged file}
+setwd("C:/Gene_cognition_shafiq/02_Cleaning_Cognitive_data/Aggregated_Clean_Cognitive_Data")
+fwrite(vy_reduced, file = "Vocabulary_Aggregated_Feb2022.txt", sep = "\t", col.names = TRUE, row.names = FALSE, quote=FALSE)
+```
+
+
+
+
+
+
+
+
+
+
+

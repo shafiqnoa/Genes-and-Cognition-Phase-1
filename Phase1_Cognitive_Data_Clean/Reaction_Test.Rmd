@@ -1,0 +1,137 @@
+---
+title: "Reaction Test"
+author: "Shafiq"
+date: "31/01/2022"
+output: html_document
+---
+
+```{r setup, echo=FALSE, message=FALSE, warning=FALSE}
+library(ggplot2)
+library(data.table)
+library(patchwork)
+library(forcats)
+library(knitr)
+library(lubridate)
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(MASS)
+library(gplots)
+library(RColorBrewer)
+library(rmarkdown)
+library(skimr)
+library(ggpubr)
+```
+
+# Merge pilot and main Phase data for reactiont test
+```{r Reading pilot phase data file}
+setwd("C:/NIHR_Bioresource/Orginal_Data/Gene_and_cognition_study/Emma_har/G&C_Main_Phase1_Pilot_new/results_20200825_Modified_SPIDs")
+
+rt.p <- fread("results_rt_20200825_PIDRemoved_MOD.csv")
+```
+
+```{r Reading Main Phase Data}
+setwd("C:/NIHR_Bioresource/Orginal_Data/Gene_and_cognition_study/Emma_har/G&C_Main_Phase1_Cognitive_Data/G&P Main phase cognitive data - Part 2_Updated_17.06.2022")
+
+rt.m <- read.csv("results_rt_20211130_PIDRemoved.csv")
+```
+
+
+# Removing duplicates from main phase data
+```{r stevens code}
+rt.m_nodups <- rt.m %>% 
+  mutate(time_stamp2 = dmy_hms(time_stamp)) %>% 
+  arrange(barcode, question, time_stamp2) %>% 
+  mutate(exactDuplicate = duplicated(.)) %>%  
+  mutate(diffDateTimeDuplicate = !exactDuplicate & {dplyr::select(., barcode, question) %>% duplicated()}) 
+
+dup_tests_removed <- rt.m_nodups %>% 
+  filter(exactDuplicate | diffDateTimeDuplicate) 
+
+dup_tests_removed %>% 
+  group_by(barcode, exactDuplicate, diffDateTimeDuplicate) %>% 
+  count()
+
+rt.m_nodups <- rt.m_nodups %>% 
+  filter(!exactDuplicate & !diffDateTimeDuplicate) %>% 
+  dplyr::select(colnames(rt.m))
+```
+
+
+# Merging data 
+```{r, echo = FALSE, warning = FALSE}
+rt <- full_join(rt.p,rt.m_nodups, all=TRUE) 
+```
+
+
+# Device
+```{r Deive use, echo = FALSE, warning = FALSE}
+rt$device_name2 <- as.character(rt$device_name)
+rt$device_name2[grep("Windows", rt$device_name2, ignore.case = TRUE)] <- "Windows 10"
+rt$device_name2[grep("iphone", rt$device_name2, ignore.case = TRUE)] <- "iPhone"
+rt$device_name2[grep("android", rt$device_name2, ignore.case = TRUE)] <- "Android"
+rt$device_name2 <- as.factor(rt$device_name2)
+
+devices <- aggregate(rt$device_name2, by = list(rt$barcode), FUN = unique)
+names(devices) <- c("barcode","Devices")
+```
+
+```{r Replace zero value with Minimim non-zero score from data, echo=TRUE}
+zero <- rt %>% filter(response_ms<=0) 
+zero <- rt %>% filter(barcode=="xxxxxx")
+zero <- separate(zero, question, into = c("test", "Number"), sep = 2, remove = FALSE)
+
+
+mean_response_ms <- mean(zero$response_ms) #509.15
+
+zero %>% filter(question=="RT44"|question=="RT45"|question=="RT46"|question=="RT47")
+
+rt$response_ms <- replace(rt$response_ms,rt$response_ms==0, NA)
+
+rt <- rt %>% replace_na(list(response_ms=15))
+```
+
+
+# Response time in Mili-seconds
+```{r Response time in miliseconds, echo=TRUE}
+
+iscorrect_sum <- aggregate(rt$iscorrect, by = list(rt$barcode), FUN = sum)
+colnames(iscorrect_sum) <- c("barcode", "correct_sum")
+
+
+rt$response_ms_log10 <- log10(rt$response_ms)
+
+
+# Calculating Mean for each person
+rtMean_ms <- plyr::ddply(rt, "barcode", summarise, rtMean_mil_sec = mean(response_ms), device_name2 = unique(device_name2))
+```
+
+```{r Additional plots, echo=TRUE}
+rt$Response_type <- ifelse(rt$iscorrect==0, "In-correct", "Correct")
+rt$Response_type <- as.factor(rt$Response_type)
+
+rt <- separate(rt, question, into = c("test", "Number"), sep = 2, remove = FALSE)
+```
+
+
+## Aggregating device used, items corrected and response time varriables
+```{r Aggregating Variables and plotting, echo=TRUE}
+iscorrect_sum <- aggregate(rt$iscorrect, by = list(rt$barcode), FUN = sum, na.rm=TRUE)
+names(iscorrect_sum) <- c("barcode", "iscorrect_sum")
+
+# mean response time and device
+rt_Mean_ms <- plyr::ddply(rt, "barcode", summarise, rtMean_mil_sec = mean(response_ms), device_name2 = unique(device_name2))
+
+
+rt_reduced <- list(iscorrect_sum,rt_Mean_ms) %>%
+    Reduce(function(dtf1,dtf2) full_join(dtf1,dtf2,by="barcode"), .)
+rt_reduced$log10_mean_ms <- log10(rt_reduced$rtMean_mil_sec)
+```
+
+```{r Saving Merged file}
+setwd("C:/Gene_cognition_shafiq/02_Cleaning_Cognitive_data/Aggregated_Clean_Cognitive_Data")
+fwrite(rt_reduced, file = "Reaction_Time_Aggregated_Feb2022.txt", sep = "\t", col.names = TRUE, row.names = FALSE, quote=FALSE)
+```
+
+
+

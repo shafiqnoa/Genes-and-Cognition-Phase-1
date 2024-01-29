@@ -1,0 +1,145 @@
+---
+title: "Pairing7"
+author: "Shafiq"
+date: "23/02/2022"
+output: html_document
+---
+
+```{r setup, echo=FALSE, message=FALSE, warning=FALSE}
+library(ggplot2)
+library(data.table)
+library(patchwork)
+library(forcats)
+library(knitr)
+library(lubridate)
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(MASS)
+library(gplots)
+library(RColorBrewer)
+library(rmarkdown)
+library(skimr)
+library(ggpubr)
+```
+
+
+# Reading pilot data
+```{r Reading pilot file, echo = TRUE, warning = FALSE}
+setwd("C:/NIHR_Bioresource/Orginal_Data/Gene_and_cognition_study/Emma_har/G&C_Main_Phase1_Pilot_new/results_20200825_Modified_SPIDs")
+
+p7.p <- fread("results_p7_20200825_PIDRemoved_MOD.csv") #3313
+```
+
+
+# Reading Main Data
+```{r Reading data, echo = FALSE, warning = FALSE}
+setwd("C:/NIHR_Bioresource/Orginal_Data/Gene_and_cognition_study/Emma_har/G&C_Main_Phase1_Cognitive_Data/G&P Main phase cognitive data - Part 1_Updated_17.06.2022")
+
+p7.m <- fread("results_p7_20211130_PIDRemoved.csv") #145593 rows
+```
+
+# Removing duplicate tests 
+```{r Removing Duplicated test results from main phase data}
+p7.m_nodups <- p7.m %>% 
+  mutate(time_stamp2 = dmy_hms(time_stamp)) %>% 
+  arrange(barcode, question, time_stamp2) %>% 
+  mutate(exactDuplicate = duplicated(.)) %>%  
+  mutate(diffDateTimeDuplicate = !exactDuplicate & {dplyr::select(., barcode, question) %>% duplicated()})
+
+dup_tests_removed <- p7.m_nodups %>% 
+  filter(exactDuplicate | diffDateTimeDuplicate) 
+
+p7.m_nodups <- p7.m_nodups %>% 
+  filter(!exactDuplicate & !diffDateTimeDuplicate) %>% 
+  dplyr::select(colnames(p7.m))
+table(aggregate(p7.m_nodups$barcode, list(p7.m_nodups$barcode), length)[, 2]) #20794
+```
+
+
+# Merging data 
+```{r, echo = FALSE, warning = FALSE}
+p7 <- full_join(p7.p,p7.m_nodups) 
+p7$response_ms <- as.numeric(p7$response_ms)
+p7$p7guesses <- as.numeric(p7$p7guesses)
+```
+
+
+# Device
+```{r Deive use, echo = FALSE, warning = FALSE}
+p7$device_name2 <- as.character(p7$device_name)
+p7$device_name2[grep("Windows", p7$device_name2, ignore.case = TRUE)] <- "Windows 10"
+p7$device_name2[grep("iphone", p7$device_name2, ignore.case = TRUE)] <- "iPhone"
+p7$device_name2[grep("android", p7$device_name2, ignore.case = TRUE)] <- "Android"
+p7$device_name2 <- as.factor(p7$device_name2)
+```
+
+
+# Examining extreme values
+```{r}
+id <- p7$barcode[p7$p7guesses > 9]
+dt <- p7[p7$barcode %in% id, ]
+
+ggplot(dt, aes(x=p7guesses, y=response_ms))+
+  geom_point(size=1.5)+
+  facet_grid(device_name2 ~ ., )+
+   theme(legend.position="null",strip.text.y = element_text(angle = 0))+
+  labs(title = "Response time for number of guesses made across Devices",
+       x = "Number of gueses", y = "Response Time (Mili-seconds)") + 
+  theme_bw()
+
+
+ggplot(dt, aes(x=p7guesses, y=question))+
+  geom_point(size=1.5)+
+  facet_grid(device_name2 ~ ., )+
+     theme(legend.position="null",strip.text.y = element_text(angle = 0))+
+  labs(title = "Number of guesses made across questions and devices",
+       x = "Number of gueses", y = "Questions") + 
+  theme_bw()
+
+ggplot(dt, aes(x=p7guesses, y=response_ms))+
+  geom_point(size=1.5)+
+  facet_grid(question ~ ., )+
+     theme(legend.position="null",strip.text.y = element_text(angle = 0))+
+  labs(title = "Response time for number of guesses made across questions",
+       x = "Number of gueses", y = "Response Time (Mili-seconds)") + 
+  theme_bw()
+```
+
+# Aggregate paring data and plots 
+```{r Aggregate paring 7 test results}
+# Number of guess
+p7_num_guess <- aggregate(p7$p7guesses, by = list(p7$barcode), FUN = sum, na.rm=TRUE)
+names(p7_num_guess) <- c("barcode", "p7_total_guesses")
+
+# Guess length
+p7_guess_length <- aggregate(p7$p7guesses, by = list(p7$barcode), FUN = length)
+colnames(p7_guess_length) <- c("barcode", "p7_guess_length")
+
+
+# mean response time and device
+p7_Mean_ms <- plyr::ddply(p7, "barcode", summarise, p7Mean_mil_sec = mean(response_ms), device_name2 = unique(device_name2))
+
+
+# correct guess proportion 
+p7_reduced <- list(p7_num_guess,p7_Mean_ms,p7_guess_length) %>%
+    Reduce(function(dtf1,dtf2) full_join(dtf1,dtf2,by="barcode"), .)
+
+# measuring proportion of correct guess
+p7_reduced$p7_incorr_guess_prop <- p7_reduced$p7_total_guesses/p7_reduced$p7_guess_length
+```
+
+```{r Saving Merged file}
+setwd("C:/Gene_cognition_shafiq/02_Cleaning_Cognitive_data/Aggregated_Clean_Cognitive_Data")
+fwrite(p7_reduced, file = "Pairing7_Aggregated_Feb2022.txt", sep = "\t", col.names = TRUE, row.names = FALSE, quote=FALSE)
+```
+
+
+
+
+
+
+
+
+
+

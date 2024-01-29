@@ -1,0 +1,154 @@
+---
+title: "Quiz"
+author: "Steven and Shafiq"
+date: "01/02/2022"
+output:
+ html_document: default
+pdf_document: default
+---
+  
+```{r setup, echo=FALSE, message=FALSE, warning=FALSE}
+library(ggplot2)
+library(data.table)
+library(patchwork)
+library(forcats)
+library(knitr)
+library(lubridate)
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(MASS)
+library(gplots)
+library(RColorBrewer)
+library(rmarkdown)
+library(skimr)
+library(ggpubr)
+```
+
+# Reading pilot data and descriptive stats 
+```{r Reading pilot file, echo = FALSE, warning = FALSE}
+setwd("C:/NIHR_Bioresource/Orginal_Data/Gene_and_cognition_study/Emma_har/G&C_Main_Phase1_Pilot_new/results_20200825_Modified_SPIDs")
+
+qz.p <- fread("results_qz_20200825_PIDRemoved_MOD.csv")
+```
+
+# Reading Main Data
+```{r Reading data, echo = FALSE, warning = FALSE}
+setwd("C:/NIHR_Bioresource/Orginal_Data/Gene_and_cognition_study/Emma_har/G&C_Main_Phase1_Cognitive_Data/G&P Main phase cognitive data - Part 1_Updated_17.06.2022")
+
+qz.m <- fread("results_qz_20211130_PIDRemoved.csv")
+```
+
+
+# Removing duplicates from main phase data
+```{r}
+qz.m_nodups <- qz.m %>% 
+  mutate(time_stamp2 = dmy_hms(time_stamp)) %>% 
+  arrange(barcode, question, time_stamp2) %>% 
+  mutate(exactDuplicate = duplicated(.)) %>%  
+  mutate(diffDateTimeDuplicate = !exactDuplicate & {dplyr::select(., barcode, question) %>% duplicated()})
+
+dup_tests_removed <- qz.m_nodups %>% 
+  filter(exactDuplicate | diffDateTimeDuplicate) 
+
+qz.m_nodups <- qz.m_nodups %>% 
+  filter(!exactDuplicate & !diffDateTimeDuplicate) %>% 
+  dplyr::select(colnames(qz.m))
+```
+
+
+# Merging data 
+```{r, echo = FALSE, warning = FALSE}
+qz <- full_join(qz.p,qz.m_nodups) 
+```
+
+# Device: Creating readable device varriable
+```{r Deive use, echo = FALSE, warning = FALSE}
+qz$device_name2 <- as.character(qz$device_name)
+qz$device_name2[grep("Windows", qz$device_name2, ignore.case = TRUE)] <- "Windows 10"
+qz$device_name2[grep("iphone", qz$device_name2, ignore.case = TRUE)] <- "iPhone"
+qz$device_name2[grep("android", qz$device_name2, ignore.case = TRUE)] <- "Android"
+qz$device_name2 <- as.factor(qz$device_name2)
+
+devices <- aggregate(qz$device_name2, by = list(qz$barcode), FUN = unique)
+names(devices) <- c("barcode","Devices")
+```
+
+# There are 13 questions : renaming questions 
+```{r Questions, echo = FALSE, warning = FALSE}
+qz$qs_number <-  ifelse(qz$question=="RQ00",1,
+                       ifelse(qz$question=="RQ01F",2,
+                              ifelse(qz$question=="RQ02C",3,
+                                     ifelse(qz$question=="RQ03H",4,
+                                            ifelse(qz$question=="RQ04E",5,
+                                                   ifelse(qz$question=="RQ05D",6,
+                                                          ifelse(qz$question=="RQ06I",7,
+                                                                 ifelse(qz$question=="RQ07J",8,
+                                                                        ifelse(qz$question=="RQ08G",9,
+                                                                               ifelse(qz$question=="RQ09B",10,
+                                                                                      ifelse(qz$question=="RQ10",11,
+                                                                                          ifelse(qz$question=="RQ12K",12,13))))))))))))
+```
+
+
+# Unresonable data points for response time
+```{r }
+unresonable <- qz %>% filter(response_ms>120000)
+qz$response_ms <- replace(qz$response_ms,qz$response_ms>120000, 120000)
+```
+
+# Response time in Mili-seconds: Replace zero value with Minimim non-zero score from data
+```{r, echo = FALSE, warning = FALSE}
+temp <- qz %>% filter(response_ms<=0) 
+zero <- qz %>% filter(barcode=="SP00300138424K"|barcode=="SP00300149893B")
+zero$iscorrect <- as.factor(zero$iscorrect)
+zero %>% filter(qs_number==7|qs_number==8|qs_number==9|qs_number==10)
+
+# Replacing Zero response time with NA, echo=TRUE}
+qz$response_ms <- replace(qz$response_ms,qz$response_ms==0, NA)
+
+# Replacing Zero response time with minimum response time, echo=TRUE}
+qz_full <- qz %>% replace_na(list(response_ms=3))
+```
+
+
+# Number of Correct Answers
+```{r, echo = FALSE, warning = FALSE}
+qz_full$iscorrect <- as.numeric(qz_full$iscorrect)
+qz_iscorrect_sum <- aggregate(qz_full$iscorrect, by = list(qz_full$barcode), FUN = sum)
+colnames(qz_iscorrect_sum) <- c("barcode", "qz_correct_sum")
+
+#is correct length
+qz_iscorrect_length <- aggregate(qz$iscorrect, by = list(qz$barcode), FUN = length)
+colnames(qz_iscorrect_length) <- c("barcode", "qz_correct_length")
+```
+
+# Calculating Mean for each person
+```{r}
+qzMean_ms <- plyr::ddply(qz_full, "barcode", summarise, qzMean_mil_sec = mean(response_ms), device_name2 = unique(device_name2))
+```
+
+
+# Aggregating device used, items corrected and response time varriables
+```{r Aggregate Varriables, echo=TRUE, warning=TRUE}
+qz_full$Response_type <- ifelse(qz_full$iscorrect==0, "In-correct", "Correct")
+qz_full$Response_type <- as.factor(qz_full$Response_type)
+
+device <- qz_full[,c(1,9)] # device used varriable
+device <- unique(device)
+
+qz_response_ms_sum <- aggregate(qz_full$response_ms, by = list(qz_full$barcode), FUN = sum, na.rm=TRUE)
+colnames(qz_response_ms_sum) <- c("barcode", "response_ms_sum")
+
+qz_merged <- list(qz_iscorrect_sum,qzMean_ms,qz_iscorrect_length) %>%
+    Reduce(function(dtf1,dtf2) full_join(dtf1,dtf2,by="barcode"), .)
+
+qz_merged$qz_correct_prop <- qz_merged$qz_correct_sum/qz_merged$qz_correct_length
+```
+
+# writting aggregated quiz data: combining main and pilot data
+```{r , echo = FALSE, warning = FALSE}
+setwd("C:/Gene_cognition_shafiq/02_Cleaning_Cognitive_data/Aggregated_Clean_Cognitive_Data")
+fwrite(qz_merged, file = "Quiz_Aggregated_Feb2022.txt", sep = "\t", col.names = TRUE, row.names = FALSE, quote=FALSE)
+```
+

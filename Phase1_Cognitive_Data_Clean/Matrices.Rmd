@@ -1,0 +1,109 @@
+---
+title: "Matrices"
+author: "Shafiq & Steven"
+date: "01/03/2022"
+output: html_document
+---
+
+```{r setup, echo=FALSE, message=FALSE, warning=FALSE}
+library(ggplot2)
+library(data.table)
+library(patchwork)
+library(forcats)
+library(knitr)
+library(lubridate)
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(MASS)
+library(gplots)
+library(RColorBrewer)
+library(rmarkdown)
+library(skimr)
+library(ggpubr)
+```
+
+# Reading pilot data and descriptive stats 
+```{r Reading pilot file, echo = FALSE, warning = FALSE}
+setwd("C:/NIHR_Bioresource/Orginal_Data/Gene_and_cognition_study/Emma_har/G&C_Main_Phase1_Pilot_new/results_20200825_Modified_SPIDs")
+
+mx.p <- fread("results_mx_20200825_PIDRemoved_MOD.csv") 
+```
+
+# Reading Main Data
+```{r Reading data, echo = FALSE, warning = FALSE}
+setwd("C:/NIHR_Bioresource/Orginal_Data/Gene_and_cognition_study/Emma_har/G&C_Main_Phase1_Cognitive_Data/G&P Main phase cognitive data - Part 1_Updated_17.06.2022")
+
+mx.m <- fread("results_mx_20211130_PIDRemoved.csv")
+```
+
+
+# Removing duplicates from main phase data
+```{r}
+mx.m_nodups <- mx.m %>% 
+  mutate(time_stamp2 = dmy_hms(time_stamp)) %>% 
+  arrange(barcode, question, time_stamp2) %>% 
+  mutate(exactDuplicate = duplicated(.)) %>% 
+  mutate(diffDateTimeDuplicate = !exactDuplicate & {dplyr::select(., barcode, question) %>% duplicated()}) 
+
+dup_tests_removed <- mx.m_nodups %>% 
+  filter(exactDuplicate | diffDateTimeDuplicate) 
+
+mx.m_nodups <- mx.m_nodups %>% 
+  filter(!exactDuplicate & !diffDateTimeDuplicate) %>% 
+  dplyr::select(colnames(mx.m))
+```
+
+# Merging data 
+```{r, echo = FALSE, warning = FALSE}
+mx <- full_join(mx.p,mx.m_nodups) 
+```
+
+# Device
+```{r Deive use, echo = FALSE, warning = FALSE}
+mx$device_name2 <- as.character(mx$device_name)
+mx$device_name2[grep("Windows", mx$device_name2, ignore.case = TRUE)] <- "Windows 10"
+mx$device_name2[grep("iphone", mx$device_name2, ignore.case = TRUE)] <- "iPhone"
+mx$device_name2[grep("android",mx$device_name2, ignore.case = TRUE)] <- "Android"
+mx$device_name2 <- as.factor(mx$device_name2)
+```
+
+# Unreasonale values
+```{r}
+unresonable <- mx %>% filter(response_ms>90000)
+unresonable_ids <- data.frame(unique(unresonable$barcode))
+mx$response_ms <- replace(mx$response_ms,mx$response_ms>=90000, 90000)
+```
+
+
+# Agrregating Matrix Pattern Completion Tasks
+```{r Agrregating Matrix Pattern Completion Tasks}
+#is-correct 
+mx_iscorrect_sum <- aggregate(mx$iscorrect, by = list(mx$barcode), FUN = sum)
+colnames(mx_iscorrect_sum) <- c("barcode", "mx_correct_sum")
+ids <- mx_iscorrect_sum %>% filter(mx_correct_sum>15) #zero
+
+#is correct length
+mx_iscorrect_length <- aggregate(mx$iscorrect, by = list(mx$barcode), FUN = length)
+colnames(mx_iscorrect_length) <- c("barcode", "mx_correct_length")
+
+
+# Mean response time and device
+mx_Mean_ms <- plyr::ddply(mx, "barcode", summarise, mxMean_mil_sec = mean(response_ms), device_name2 = unique(device_name2))
+
+mx_reduced <- list(mx_iscorrect_sum,mx_Mean_ms, mx_iscorrect_length) %>%
+    Reduce(function(dtf1,dtf2) full_join(dtf1,dtf2,by="barcode"), .)
+
+# measuring proportion of correct answer
+mx_reduced$mx_correct_prop <- mx_reduced$mx_correct_sum/mx_reduced$mx_correct_length
+```
+
+```{r Saving Merged file}
+setwd("C:/Gene_cognition_shafiq/02_Cleaning_Cognitive_data/Aggregated_Clean_Cognitive_Data")
+fwrite(mx_reduced, file = "Matrices_Aggregated_Feb2022.txt", sep = "\t", col.names = TRUE, row.names = FALSE, quote=FALSE)
+```
+
+
+
+
+

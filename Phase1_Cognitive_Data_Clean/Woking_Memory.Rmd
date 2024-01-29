@@ -1,0 +1,137 @@
+---
+title: "Working Memory"
+author: "Shafiq"
+date: "31/01/2022"
+output: html_document
+---
+
+```{r setup, echo=FALSE, message=FALSE, warning=FALSE}
+library(ggplot2)
+library(data.table)
+library(patchwork)
+library(forcats)
+library(knitr)
+library(lubridate)
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(MASS)
+library(gplots)
+library(RColorBrewer)
+library(rmarkdown)
+library(skimr)
+library(ggpubr)
+```
+
+
+# Reading Pilot data
+```{r Reading pilot file, echo = TRUE, warning = FALSE}
+setwd("C:/NIHR_Bioresource/Orginal_Data/Gene_and_cognition_study/Emma_har/G&C_Main_Phase1_Pilot_new/results_20200825_Modified_SPIDs")
+
+wm.p <- fread("results_wm_20200825_PIDRemoved_MOD.csv")
+wm.p$numstring <- as.numeric(as.character(wm.p$numstring))
+wm.p$numstring_entered <- as.numeric(as.character(wm.p$numstring_entered))
+
+
+# Presence of NA values across pilot RT test data 
+sapply(wm.p, function(x) sum(is.na(x)))
+wm.p$numstring_entered[is.na(wm.p$numstring_entered)] = 9999
+```
+
+# Reading Main Data
+```{r Reading data, echo = FALSE, warning = FALSE}
+setwd("C:/NIHR_Bioresource/Orginal_Data/Gene_and_cognition_study/Emma_har/G&C_Main_Phase1_Cognitive_Data/G&P Main phase cognitive data - Part 3_Updated_17.06.2022")
+wm.m <- fread("results_wm_20211130_PIDRemoved.csv") #142257 rows
+length(unique(wm.m$barcode)) #20780
+summary(wm.m$numdigits) #min:1 max:24
+
+wm.m$numstring <- as.numeric(as.character(wm.m$numstring))
+wm.m$numstring_entered <- as.numeric(as.character(wm.m$numstring_entered))
+wm.m$numstring_entered[is.na(wm.m$numstring_entered)] = 9999
+```
+
+# Removing duplicates from main phase data
+```{r}
+barcode_duplicated <- wm.m %>% 
+  group_by(barcode) %>% 
+  mutate(n2 = sum(countstrikes == 2)) %>% 
+  filter(n2 >= 2) %>% 
+  pull(barcode) %>% 
+  unique()
+
+# For the participants with duplicates, determine which entries are the duplicates
+wm.m_nodups <- wm.m %>% 
+  mutate(time_stamp2 = dmy_hms(time_stamp)) %>% # convert time_stamp to date format and save as new variable
+  arrange(barcode, time_stamp2) %>% # sort rows by barcode and date/time
+  group_by(barcode) %>% 
+  mutate(firstDuplicateEntry = ifelse((barcode %in% barcode_duplicated) & 
+                                        (numdigits == 1 & !is.na(lag(numdigits)) & lag(numdigits) > 1),
+                                      1, 0), # determine first duplicate entry
+         duplicate = ifelse((barcode %in% barcode_duplicated) &
+                              (row_number() >= min(n() + 1, which(firstDuplicateEntry == 1))), # find all entries after first duplicate entry
+                            1, 0)) %>% 
+  ungroup()
+
+dups_removed <- wm.m_nodups %>% 
+  filter(duplicate == 1) %>% 
+  dplyr::select(-c(duplicate, firstDuplicateEntry))
+
+wm.m_nodups <- wm.m_nodups %>% 
+  filter(duplicate == 0) %>% 
+  dplyr::select(colnames(wm.m))
+```
+
+
+# Combine pilot and main phase data 
+```{r, echo = FALSE, warning = FALSE}
+wm <- full_join(wm.p,wm.m_nodups) 
+length(unique(wm$barcode))
+```
+
+
+```{r Deive use, echo = FALSE, warning = FALSE}
+wm$device_name2 <- as.character(wm$device_name)
+wm$device_name2[grep("Windows", wm$device_name2, ignore.case = TRUE)] <- "Windows 10"
+wm$device_name2[grep("iphone", wm$device_name2, ignore.case = TRUE)] <- "iPhone"
+wm$device_name2[grep("android", wm$device_name2, ignore.case = TRUE)] <- "Android"
+wm$device_name2 <- as.factor(wm$device_name2)
+```
+
+
+# Phenotype Creation
+```{r Creation of phenotypes}
+wm$correct_ans <- wm$numstring-wm$numstring_entered
+wm$max_correct <- ifelse(wm$correct_ans==0,1,0)
+
+hist(wm$max_correct)
+
+# Correct ans
+wm_max_correct <- aggregate(wm$max_correct, by=list(wm$barcode), FUN=sum, na.rm=TRUE)
+names(wm_max_correct) <- c("barcode","wm_max_correct")
+
+# is correct length
+wm_max_correct_length <- aggregate(wm$max_correct, by = list(wm$barcode), FUN = length)
+colnames(wm_max_correct_length) <- c("barcode", "wm_max_correct_length")
+table(wm_max_correct_length$wm_max_correct_length, useNA = "a")
+sum(table(wm_max_correct_length$wm_max_correct_length, useNA = "a"))
+
+# mean response 
+wm_Mean_ms <- plyr::ddply(wm, "barcode", summarise, wmMean_mil_sec = mean(response_ms), device_name2 = unique(device_name2))
+
+wm_merged <- list(wm_max_correct,wm_Mean_ms,wm_max_correct_length) %>%
+    Reduce(function(dtf1,dtf2) full_join(dtf1,dtf2,by="barcode"), .)
+
+# measuring proportion of correct answer
+wm_merged$wm_max_correct_prop <- wm_merged$wm_max_correct/wm_merged$wm_max_correct_length
+```
+
+
+```{r Saving Merged file}
+setwd("C:/Gene_cognition_shafiq/02_Cleaning_Cognitive_data/Aggregated_Clean_Cognitive_Data")
+fwrite(wm_merged, file = "Working_memory_Aggregated_Feb2022.txt", sep = "\t", 
+       col.names = TRUE, row.names = FALSE, quote=FALSE)
+```
+
+
+
+

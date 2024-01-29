@@ -1,0 +1,192 @@
+---
+title: "Symbol Digits"
+author: "Shafiq"
+date: "09/03/2022"
+output: html_document
+---
+
+```{r setup, echo=FALSE, message=FALSE, warning=FALSE}
+library(data.table)
+library(patchwork)
+library(forcats)
+library(knitr)
+library(lubridate)
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(MASS)
+library(gplots)
+library(RColorBrewer)
+library(rmarkdown)
+library(skimr)
+library(ggpubr)
+```
+
+
+# Reading pilot data
+```{r Reading Pilot Phase Data, echo = TRUE, warning = FALSE}
+setwd("C:/NIHR_Bioresource/Orginal_Data/Gene_and_cognition_study/Emma_har/G&C_Main_Phase1_Pilot_new/results_20200825_Modified_SPIDs")
+
+ss.p <- fread("results_ss_20200825_PIDRemoved_MOD.csv")
+```
+
+
+# Reading Main Data
+```{r Reading Main Phase Data, echo = FALSE, warning = FALSE}
+setwd("C:/NIHR_Bioresource/Orginal_Data/Gene_and_cognition_study/Emma_har/G&C_Main_Phase1_Cognitive_Data/G&P Main phase cognitive data - Part 2_Updated_17.06.2022")
+list.files()
+ss.m <- fread("results_ss_20211130_PIDRemoved.csv")
+```
+
+# Removing duplicates from main phase data
+```{r Steven code duplicate check for main}
+
+ss.m_nodups <- ss.m %>% 
+  mutate(time_stamp2 = dmy_hms(time_stamp)) %>% 
+  arrange(barcode, time_stamp2) %>% 
+  mutate(exactDuplicate = duplicated(.)) %>%  
+  group_by(barcode) %>% 
+  mutate(diffDateTimeDuplicate = !exactDuplicate & key_digits != key_digits[1]) %>%    
+  ungroup()
+
+# duplicates removed
+dup_tests_removed <- ss.m_nodups %>% 
+  filter(exactDuplicate | diffDateTimeDuplicate) 
+
+dup_tests_removed %>% 
+  group_by(barcode, exactDuplicate, diffDateTimeDuplicate) %>% 
+  count()
+
+# final dataset with no duplicates
+ss.m_nodups <- ss.m_nodups %>% 
+  filter(!exactDuplicate & !diffDateTimeDuplicate) %>% 
+  dplyr::select(colnames(ss.m))
+```
+
+
+# Combine pilot and main phase data 
+```{r, echo = FALSE, warning = FALSE}
+ss <- full_join(ss.p,ss.m_nodups)
+```
+
+
+```{r Deive use, echo = FALSE, warning = FALSE}
+ss$device_name2 <- as.character(ss$device_name)
+ss$device_name2[grep("Windows", ss$device_name2, ignore.case = TRUE)] <- "Windows 10"
+ss$device_name2[grep("iphone", ss$device_name2, ignore.case = TRUE)] <- "iPhone"
+ss$device_name2[grep("android", ss$device_name2, ignore.case = TRUE)] <- "Android"
+ss$device_name2 <- as.factor(ss$device_name2)
+```
+
+
+```{r Stevens code total time taken, eval=FALSE}
+# check amount of time passed between start and end
+totalTime <- ss %>% 
+  mutate(time_stamp2 = dmy_hms(time_stamp)) %>% 
+  group_by(barcode) %>% 
+  summarise(totalTime = max(time_stamp2) - min(time_stamp2)) %>% 
+  mutate(totalTime = as.numeric(totalTime))
+
+totalTime %>% 
+  ggplot(aes(x = totalTime)) +
+  geom_point(stat = "count") +
+  scale_x_log10() +
+  scale_y_log10() +
+  theme_bw()
+```
+
+# Examining Unreasonale Response Time Values
+```{r unresonable response time}
+unresonable <- ss %>% filter(response_ms>94100)
+
+unresonable$Response_type <- ifelse(unresonable$iscorrect==0, "In-correct", "Correct")
+
+unresonable$Response_type <- as.factor(unresonable$Response_type)
+
+ggplot(unresonable , aes(x=log10(response_ms), group=Response_type, fill=Response_type)) +
+  geom_density(adjust=1.5)+
+    facet_wrap(~device_name2,  ncol = 1, scales = "free") +
+             theme(
+    legend.position="right",
+    panel.spacing = unit(0.1, "lines"),
+    axis.ticks.x=element_blank()
+  )+
+    labs(title = "Density plot for millisecons (log10) stratified by response type",
+     x = "Response Time in Milli-seconds (log10)", y = "Density") 
+
+
+
+unresonable_ids_df <- ss[which(ss$barcode%in%unresonable$barcode),]
+
+# For one individual there is only one time point for which total time calculated was zero
+totalTime_unresonable <- unresonable_ids_df %>% 
+  mutate(time_stamp2 = dmy_hms(time_stamp)) %>% 
+  group_by(barcode) %>% 
+  summarise(totalTime = max(time_stamp2) - min(time_stamp2)) %>% 
+  mutate(totalTime = as.numeric(totalTime))
+
+unresonable_ids_df$Response_type <- ifelse(unresonable_ids_df$iscorrect==0, "In-correct", "Correct")
+unresonable_ids_df$Response_type <- as.factor(unresonable_ids_df$Response_type)
+
+# Number of correct answer
+unresonable_iscorrect_sum <- aggregate(unresonable_ids_df$iscorrect, by = list(unresonable_ids_df$barcode), FUN = sum)
+colnames(unresonable_iscorrect_sum) <- c("barcode", "correct_sum")
+
+# mean response time and device
+unresonable_Mean_ms <- plyr::ddply(unresonable_ids_df, "barcode", summarise, ssMean_mil_sec = mean(response_ms), device_name2 = unique(device_name2))
+
+unresonable_ss_reduced <- list(unresonable_iscorrect_sum ,unresonable_Mean_ms) %>%
+    Reduce(function(dtf1,dtf2) full_join(dtf1,dtf2,by="barcode"), .)
+```
+
+
+# Plot Response time
+## Replacing values <=0 with minimal number in the data 
+## Replacing values >94100 with >94100
+```{r Creation of phenotypes}
+ss %>% filter(response_ms<=0)
+ss$response_ms <- replace(ss$response_ms,ss$response_ms<=0, NA)
+ss <- ss %>% replace_na(list(response_ms=8))
+ss$response_ms <- replace(ss$response_ms,ss$response_ms>94100, 94100)
+```
+
+
+# Aggregate symbol digit test and plot
+
+```{r Aggregate Symbol Digit test results}
+# Number of correct answer
+ss_iscorrect_sum <- aggregate(ss$iscorrect, by = list(ss$barcode), FUN = sum)
+colnames(ss_iscorrect_sum) <- c("barcode", "ss_correct_sum")
+
+#is correct length
+ss_iscorrect_length <- aggregate(ss$iscorrect, by = list(ss$barcode), FUN = length)
+colnames(ss_iscorrect_length) <- c("barcode", "ss_correct_length")
+
+# mean response time and device
+ss_Mean_ms <- plyr::ddply(ss, "barcode", summarise, ssMean_mil_sec = mean(response_ms), device_name2 = unique(device_name2))
+
+
+a <- ss_Mean_ms %>% filter(ssMean_mil_sec/100>80) 
+
+ss_reduced <- list(ss_iscorrect_sum ,ss_Mean_ms,ss_iscorrect_length) %>%
+    Reduce(function(dtf1,dtf2) full_join(dtf1,dtf2,by="barcode"), .)
+summary(ss_reduced)
+
+# measuring proportion of correct answer
+ss_reduced$ss_correct_prop <- ss_reduced$ss_correct_sum/ss_reduced$ss_correct_length
+```
+
+```{r Saving Merged file}
+setwd("C:/Gene_cognition_shafiq/02_Cleaning_Cognitive_data/Aggregated_Clean_Cognitive_Data")
+fwrite(ss_reduced, file = "Symbol_Digit_Aggregated_Feb2022.txt", sep = "\t", col.names = TRUE, row.names = FALSE, quote=FALSE)
+```
+
+
+
+
+
+
+
+
+
+

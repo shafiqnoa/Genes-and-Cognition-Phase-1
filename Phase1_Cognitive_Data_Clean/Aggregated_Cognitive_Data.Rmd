@@ -1,0 +1,183 @@
+---
+title: "Aggregated Cognitive Data"
+author: "Shafiq"
+date: "29/04/2022"
+output: html_document
+---
+
+```{r}
+library(data.table)
+library(dplyr)
+library(Hmisc) # plotting hist for data frame
+library(tidyr)
+library(tableone)
+library(corrplot)
+library(ggraph)
+library(ggplot2)
+library(ggcharts)
+library(car)
+library(semPlot)
+library(psych)
+library(knitr)
+library(kableExtra)
+library(MVN)
+library(magrittr)
+library(factoextra)
+library(FactoMineR)
+library(heatmaply)
+library(pca3d)
+library(rgl)
+library(scatterplot3d)
+library(ggplot2)
+```
+
+
+# Reading all aggregated cognitive test data separately 
+## All times will be in mili-seconds 
+```{r Reading all CT data}
+# Reaction time
+rt <- fread("C:/Gene_cognition_shafiq/02_Cleaning_Cognitive_data/Aggregated_Clean_Cognitive_Data/Reaction_Time_Aggregated_Feb2022.txt")
+rt <- rt[,c(1:4)]
+names(rt) <- c("barcode","rt_correct_sum","rtMean_resp_time", "device_name2")
+
+# Quiz 
+qz <- fread("C:/Gene_cognition_shafiq/02_Cleaning_Cognitive_data/Aggregated_Clean_Cognitive_Data/Quiz_Aggregated_Feb2022.txt")
+
+# Working memory: 
+wm <- fread("C:/Gene_cognition_shafiq/02_Cleaning_Cognitive_data/Aggregated_Clean_Cognitive_Data/Working_memory_Aggregated_Feb2022.txt")
+
+# Pairing 7
+p7 <- fread("C:/Gene_cognition_shafiq/02_Cleaning_Cognitive_data/Aggregated_Clean_Cognitive_Data/Pairing7_Aggregated_Feb2022.txt")
+
+# Stroop Box 
+sb <- fread("C:/Gene_cognition_shafiq/02_Cleaning_Cognitive_data/Aggregated_Clean_Cognitive_Data/Stroop_Box_Aggregated_Feb2022.txt")
+names(sb) <- c("barcode","sb_correct_sum","sbMean_resp_time", "device_name2", "sb_correct_length","sb_correct_prop")
+
+# Stroop Ink 
+si <- fread("C:/Gene_cognition_shafiq/02_Cleaning_Cognitive_data/Aggregated_Clean_Cognitive_Data/Stroop_Ink_Aggregated_Feb2022.txt")
+names(si) <- c("barcode","si_correct_sum","siMean_resp_time", "device_name2", "si_correct_length","si_correct_prop")
+
+# Matrices
+mx <- fread("C:/Gene_cognition_shafiq/02_Cleaning_Cognitive_data/Aggregated_Clean_Cognitive_Data/Matrices_Aggregated_Feb2022.txt")
+
+# Vocabulary 
+vy <- fread("C:/Gene_cognition_shafiq/02_Cleaning_Cognitive_data/Aggregated_Clean_Cognitive_Data/Vocabulary_Aggregated_Feb2022.txt")
+
+# Trails: Whole data 
+ts <- fread("C:/Gene_cognition_shafiq/02_Cleaning_Cognitive_data/Aggregated_Clean_Cognitive_Data/Trails_Aggregated_Feb2022.txt")
+colnames(ts)
+ts <- ts[,c(1:4,7,8,11,12)]
+names(ts) <- c("barcode","ts_total_guesses","tsMean_resp_time", "device_name2", 
+               "ts_num_total_guesses","ts_num_Mean_resp_time","ts_alpha_total_guesses","ts_alpha_Mean_resp_time")
+
+
+# Symbol Digit 
+sd <- fread("C:/Gene_cognition_shafiq/02_Cleaning_Cognitive_data/Aggregated_Clean_Cognitive_Data/Symbol_Digit_Aggregated_Feb2022.txt")
+names(sd) <- c("barcode","sd_correct_sum","sdMean_resp_time", "device_name2", "sd_correct_length","sd_correct_prop")
+```
+
+# Merging all data and save
+```{r Merge all data}
+dfs <- Reduce(function(x,y) merge(x = x, y = y, by = c("barcode","device_name2"), all=TRUE), 
+       list(rt,qz,wm,p7,sb,si,mx,vy,ts,sd)) #21,169 participants 
+
+dfs$barcode <- toupper(dfs$barcode)
+
+# one id is duplicated but missing information available in both rows; thereby aggregated 
+duplicates <- dfs[(duplicated(dfs$barcode) | duplicated(dfs$barcode, fromLast=TRUE))]
+duplicates <- duplicates %>% replace(is.na(.), 0)
+duplicate_sample_merged <- duplicates %>% group_by(barcode, device_name2) %>% summarise_all(sum) #%>% relocate(ct_attempted, .after = last_col())
+
+dfs_without_duplicated_sample <- dfs[which(!dfs$barcode=="SP00300148173G",)] #21,167
+
+dfs <- merge(dfs_without_duplicated_sample,duplicate_sample_merged, all=TRUE) #21,168
+
+My_Theme = theme(
+  axis.title.x = element_text(size = 14, color = "blue", face = "bold"),
+  axis.text.x = element_text(size = 10,color = "black", face = "bold"),
+  axis.title.y = element_text(size = 14, color = "blue", face = "bold"),
+  axis.text.y = element_text(size = 10, color = "black", face = "bold"),
+  axis.line = element_line(),
+  panel.grid.major = element_blank(),
+  panel.grid.minor = element_blank(),
+  panel.border = element_blank(),
+  panel.background = element_blank())
+
+ggplot(dfs, aes(x=device_name2)) +
+  geom_bar(width=0.4, colour = "#1F3552", fill = "#4271AE")+
+  ylab("Number of volunteers (n=21,168)") +
+  xlab("Devices") + My_Theme
+
+
+fwrite(dfs, file="C:/Gene_cognition_shafiq/02_Cleaning_Cognitive_data/Aggregated_Clean_Cognitive_Data/All_Cogtests_Aggregated_Phase1.txt", col.names=TRUE, row.names = FALSE, sep="\t")
+```
+
+# Main varriables from the tests 
+```{r}
+rel_vars <- dfs %>%
+  select_if(grepl("barcode|correct_sum|Mean_resp|max_correct|guesses|vy_correct_prop", names(.)))
+
+rel_vars <- rel_vars[,c(1,3:5,8,10,12,13,14,19,21,22)]
+
+names(rel_vars) <- c("barcode","RT","QZ","WM",
+                       "PR","SB","SI","MX",
+                       "VY","TM_Num","TM_Alpha","SD")
+
+rel_vars <- rel_vars %>% mutate_if(is.integer,as.numeric)
+
+library(Hmisc)
+hist.data.frame(rel_vars[,-1])
+
+rel_vars$RT_l10  <- log10(rel_vars$RT)
+rel_vars$WM_l10  <- log10(rel_vars$WM)
+rel_vars$PR_l10  <- log10(rel_vars$PR)
+rel_vars$SB_l10  <- log10(rel_vars$SB)
+rel_vars$SI_l10  <- log10(rel_vars$SI)
+rel_vars$TM_Num_l10  <- log10(rel_vars$TM_Num)
+rel_vars$TM_Alpha_l10  <- log10(rel_vars$TM_Alpha)
+
+
+# Reversing scores for QZ, VY, WM, MX and SD tests to have same scoring 
+rel_vars$QZ_rev <- max(rel_vars$QZ, na.rm = TRUE) - rel_vars$QZ
+rel_vars$VY_rev <- max(rel_vars$VY ,na.rm = TRUE) - rel_vars$VY
+rel_vars$WM_l10_rev <- max(rel_vars$WM_l10, na.rm = TRUE) - rel_vars$WM_l10
+rel_vars$MX_rev <- max(rel_vars$MX, na.rm = TRUE) - rel_vars$MX
+rel_vars$SD_rev <- max(rel_vars$SD, na.rm = TRUE) - rel_vars$SD
+
+cogt <- rel_vars[,c(1,20,22:24,21,13,15:19)]
+```
+
+
+# This is for G-11 (combined all 11 tests)
+```{r G-11}
+cogt_full <- na.omit(cogt) 
+g11.pr <- prcomp(cogt_full[,-1], center = TRUE, scale = TRUE)
+g11_pcs <- as.data.frame(g11.pr$x)
+g11 <- as.data.frame(g11_pcs$PC1) 
+names(g11) <- "g_11"
+get_eigenvalue(g11.pr)
+```
+
+# G-6 including PR,TM tests, RT, SI, SB (6 tests)
+```{r G-6, PR TM tests RT SI SB}
+g6.pr <- prcomp(cogt_full[,c(7:12)], center = TRUE, scale = TRUE)
+g6_pcs <- as.data.frame(g6.pr$x)
+g6 <- as.data.frame(g6_pcs$PC1) 
+names(g6) <- "g_6"
+```
+
+# G-4 including QZ, WM, MX and SD
+```{r G-4, QZ WM MX SD}
+g4.pr <- prcomp(cogt_full[,c(2:5)], center = TRUE, scale = TRUE)
+g4_pcs <- as.data.frame(g4.pr$x)
+g4 <- as.data.frame(g4_pcs$PC1) # first PCs as general intelligence (explains 41.4% variance)
+names(g4) <- "g_4"
+```
+
+
+# Combine PCs to CT tests data and make complete data frame
+```{r, Combine all these PCs to dataset}
+cogt_full_pcs <- cbind(cogt_full,g11,g6,g4)
+main_cogs_pc <- merge(cogt, cogt_full_pcs, all = TRUE)
+fwrite(main_cogs_pc, file="C:/Gene_cognition_shafiq/02_Cleaning_Cognitive_data/Aggregated_Clean_Cognitive_Data/Main_cognitive_varriable_includingG.txt", col.names=TRUE, row.names = FALSE, sep="\t")
+```

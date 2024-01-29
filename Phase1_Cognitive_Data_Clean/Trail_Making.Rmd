@@ -1,0 +1,213 @@
+---
+title: "Trail Making"
+author: "Shafiq"
+date: "08/03/2022"
+output: html_document
+---
+
+```{r setup, echo=FALSE, message=FALSE, warning=FALSE}
+library(data.table)
+library(patchwork)
+library(forcats)
+library(knitr)
+library(lubridate)
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(MASS)
+library(gplots)
+library(RColorBrewer)
+library(rmarkdown)
+library(skimr)
+library(ggpubr)
+library(psych)
+```
+
+# Reading pilot data
+```{r Reading pilot file, echo = TRUE, warning = FALSE}
+setwd("C:/NIHR_Bioresource/Orginal_Data/Gene_and_cognition_study/Emma_har/G&C_Main_Phase1_Pilot_new/results_20200825_Modified_SPIDs")
+
+ts.p <- fread("results_ts_20200825_PIDRemoved_MOD.csv") 
+```
+
+# Reading Main Data
+```{r Reading data, echo = FALSE, warning = FALSE}
+setwd("C:/NIHR_Bioresource/Orginal_Data/Gene_and_cognition_study/Emma_har/G&C_Main_Phase1_Cognitive_Data/G&P Main phase cognitive data - Part 3_Updated_17.06.2022")
+
+ts.m <- fread("results_ts_20211130_PIDRemoved.csv")
+```
+
+
+# Removing duplicates from Trail Numeric test
+```{r Trails Numeric}
+ts.m_num <- ts.m %>% filter(test_name=="TrailsNumeric")
+
+ts.m_num %>% 
+  group_by(barcode) %>% 
+  count() %>% 
+  pull(n) %>% 
+  table()
+
+ts.m_num %>% 
+  group_by(barcode) %>%
+  filter(n() > 24) %>% 
+  count()
+
+ts.m_num_nodups <- ts.m_num %>% 
+  mutate(time_stamp2 = dmy_hms(time_stamp)) %>% 
+  arrange(barcode, question, time_stamp2) %>% 
+  mutate(exactDuplicate = duplicated(.)) %>%  
+  mutate(diffDateTimeDuplicate = !exactDuplicate & {dplyr::select(., barcode, question) %>% duplicated()})
+
+dup_tests_removed <- ts.m_num_nodups %>% filter(exactDuplicate | diffDateTimeDuplicate) 
+
+ts.m_num_nodups <- ts.m_num_nodups %>% 
+  filter(!exactDuplicate & !diffDateTimeDuplicate) %>% 
+  dplyr::select(colnames(ts.m_num))
+```
+
+
+# Removing duplicates from Trail Alpha Numeric test
+```{r Alpha Numeric Test}
+ts.m_alpha <- ts.m %>% filter(test_name=="TrailsAlphanumeric")
+
+ts.m_alpha %>% 
+  group_by(barcode) %>% 
+  count() %>% 
+  pull(n) %>% 
+  table()
+
+ts.m_alpha %>% 
+  group_by(barcode) %>%
+  filter(n() > 24) %>% 
+  count()
+
+ts.m_alpha_nodups <- ts.m_alpha %>% 
+  mutate(time_stamp2 = dmy_hms(time_stamp)) %>%
+  arrange(barcode, question, time_stamp2) %>%
+  mutate(exactDuplicate = duplicated(.)) %>%
+  mutate(diffDateTimeDuplicate = !exactDuplicate & {dplyr::select(., barcode, question) %>% duplicated()}) 
+
+
+dup_tests_removed <- ts.m_alpha_nodups %>% 
+  filter(exactDuplicate | diffDateTimeDuplicate) 
+
+dup_tests_removed %>% 
+  group_by(barcode, exactDuplicate, diffDateTimeDuplicate) %>% 
+  count()
+
+ts.m_alpha_nodups  <- ts.m_alpha_nodups  %>% 
+  filter(!exactDuplicate & !diffDateTimeDuplicate) %>% 
+  dplyr::select(colnames(ts.m_alpha))
+```
+
+
+# Merging cleaned main and pilot phase data 
+```{r, echo = FALSE, warning = FALSE}
+ts.m <- full_join(ts.m_num_nodups,ts.m_alpha_nodups)
+```
+
+
+# Device
+```{r Deive use, echo = FALSE, warning = FALSE}
+ts$device_name2 <- as.character(ts$device_name)
+ts$device_name2[grep("Windows", ts$device_name2, ignore.case = TRUE)] <- "Windows 10"
+ts$device_name2[grep("iphone", ts$device_name2, ignore.case = TRUE)] <- "iPhone"
+ts$device_name2[grep("android", ts$device_name2, ignore.case = TRUE)] <- "Android"
+ts$device_name2 <- as.factor(ts$device_name2)
+```
+
+
+# There were no value <=0 with Minimim non-zero score.
+```{r}
+summary(ts$response_ms)
+# Mean=12593
+# Median=8347
+zero_below <-ts %>% filter(response_ms<=0) # 0 obs
+```
+
+
+# All trails tests together 
+```{r Aggregates Analysis of Trail test results}
+# Number of guess
+ts_num_guess <- aggregate(ts$guesses, by = list(ts$barcode), FUN = sum, na.rm=TRUE)
+names(ts_num_guess) <- c("barcode", "ts_total_guesses")
+
+#is correct length
+ts_guess_length <- aggregate(ts$guesses, by = list(ts$barcode), FUN = length)
+colnames(ts_guess_length) <- c("barcode", "ts_guess_length")
+table(ts_guess_length$ts_guess_length, useNA = "a")
+sum(table(ts_guess_length$ts_guess_length, useNA = "a"))
+
+# mean response time and device
+ts_Mean_ms <- plyr::ddply(ts, "barcode", summarise, tsMean_mil_sec = mean(response_ms), device_name2 = unique(device_name2))
+
+ts_reduced <- list(ts_num_guess,ts_Mean_ms,ts_guess_length) %>%
+    Reduce(function(dtf1,dtf2) full_join(dtf1,dtf2,by="barcode"), .)
+
+
+
+# measuring proportion of correct guess
+ts_reduced$ts_incorr_guess_prop <- ts_reduced$ts_total_guesses/ts_reduced$ts_guess_length
+```
+
+
+# Seprating Numeric Trail test  
+```{r}
+ts_num <- ts %>% filter(test_name=="TrailsNumeric")
+ts_num_guess_length <- aggregate(ts_num$guesses, by = list(ts_num$barcode), FUN = length)
+colnames(ts_num_guess_length) <- c("barcode", "ts_num_guess_length")
+
+# Number of guess
+ts_num_guess <- aggregate(ts_num$guesses, by = list(ts_num$barcode), FUN = sum, na.rm=TRUE)
+names(ts_num_guess) <- c("barcode", "ts_num_total_guesses")
+
+tsNum_Mean_ms <- plyr::ddply(ts_num, "barcode", summarise, ts_num_Mean_mil_sec = mean(response_ms))
+
+ts_num_reduced <- list(ts_num_guess,tsNum_Mean_ms,ts_num_guess_length) %>% Reduce(function(dtf1,dtf2) full_join(dtf1,dtf2,by="barcode"), .)
+
+ts_num_reduced$ts_num_incorr_guess_prop <- ts_num_reduced$ts_num_total_guesses/ts_num_reduced$ts_num_guess_length
+```
+
+
+
+# Seprating Alpha Numeric Trail test  
+```{r}
+ts_alpha <- ts %>% filter(test_name=="TrailsAlphanumeric")
+ts_alpha_guess_length <- aggregate(ts_alpha$guesses, by = list(ts_alpha$barcode), FUN = length)
+
+
+# Number of guess
+ts_alpha_guess <- aggregate(ts_alpha$guesses, by = list(ts_alpha$barcode), FUN = sum, na.rm=TRUE)
+names(ts_alpha_guess) <- c("barcode", "ts_alpha_total_guesses")
+
+# mean response time and device
+tsAlpha_Mean_ms <- plyr::ddply(ts_alpha, "barcode", summarise, ts_alpha_Mean_mil_sec = mean(response_ms))
+
+ts_alpha_reduced <- list(ts_alpha_guess,tsAlpha_Mean_ms,ts_alpha_guess_length) %>%
+    Reduce(function(dtf1,dtf2) full_join(dtf1,dtf2,by="barcode"), .)
+
+# measuring proportion of correct guess
+ts_alpha_reduced$ts_alpha_incorr_guess_prop <- ts_alpha_reduced$ts_alpha_total_guesses/ts_alpha_reduced$ts_alpha_guess_length
+```
+
+
+# Combine summary data for both tests and plot
+```{r}
+
+ts_aggregated <- list(ts_reduced, ts_num_reduced, ts_alpha_reduced) %>%
+    Reduce(function(dtf1,dtf2) full_join(dtf1,dtf2,by="barcode"), .)
+
+ts_rsp_times <- log10(ts_aggregated[,c(3,8,12)])
+
+setwd("C:/Gene_cognition_shafiq/02_Cleaning_Cognitive_data/Aggregated_Clean_Cognitive_Data")
+fwrite(ts_aggregated, file = "Trails_Aggregated_Feb2022.txt", sep = "\t", col.names = TRUE, row.names = FALSE, quote=FALSE)
+```
+
+
+
+
+
+
+
+
